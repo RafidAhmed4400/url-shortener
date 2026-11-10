@@ -1,5 +1,6 @@
 import os
 import string
+from functools import wraps
 
 from flask import Flask, request, redirect, jsonify
 import redis
@@ -45,7 +46,31 @@ def base62_decode(code):
         num = num * 62 + ALPHABET.index(char)
     return num
 
+def rate_limit(max_requests=10, window=60):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Get the client's IP address
+            client_ip = request.remote_addr
+            # Create a unique Redis key for this IP
+            key = f"rate_limit:{client_ip}"
+            # Check current request count
+            current = cache.get(key)
+            if current and int(current) >= max_requests:
+                return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+            # Increment counter and set expiration atomically
+            pipe = cache.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, window)
+            pipe.execute()
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
+
 @app.route("/shorten", methods=["POST"])
+@rate_limit(max_requests=10, window=60)
 def shorten_url():
     # Grab the long URL from the request body
     data = request.get_json()
